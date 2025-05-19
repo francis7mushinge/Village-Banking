@@ -1,16 +1,16 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import React from 'react';
 import {
-  View,
+  Alert,
+  StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  Alert,
-  Switch,
+  View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../SupabaseClient';
 import Animated, { FadeInUp } from 'react-native-reanimated';
+import { supabase } from '../SupabaseClient';
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
@@ -91,3 +91,4 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 });
+

@@ -1,11 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import {
-  View, Text, ScrollView, TextInput, StyleSheet,
-  TouchableOpacity, ActivityIndicator, Alert
-} from 'react-native';
-import { supabase } from '../SupabaseClient';
 import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator, Alert,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
+import { supabase } from '../SupabaseClient';
 
 export default function MeetingsScreen() {
   const [meetings, setMeetings] = useState([]);

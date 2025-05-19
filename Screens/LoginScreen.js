@@ -3,6 +3,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useState } from 'react';
 import {
   Alert,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -12,130 +13,218 @@ import {
   View,
 } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { supabase } from '../SupabaseClient'; // Update with your actual supabase client import
+import { supabase } from '../SupabaseClient';
 
 export default function LoginScreen() {
+  const navigation = useNavigation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const navigation = useNavigation();
+
+  const validateEmail = (email) => {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(email);
+  };
 
   const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Missing Fields', 'Please enter your email and password.');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      return;
+    }
+
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
 
-    setLoading(false);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (error) {
+      if (error) throw error;
+
+      // Check if user exists in members table
+      const { data: member, error: memberError } = await supabase
+        .from('members')
+        .select('id')
+        .eq('email', email)
+        .single();
+
+      if (memberError) throw new Error('Member record not found.');
+
+      navigation.replace('Home');
+    } catch (error) {
       Alert.alert('Login Error', error.message);
-    } else {
-      navigation.replace('Home'); // Navigate to Home screen on successful login
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!email) {
+      Alert.alert('Error', 'Please enter your email first.');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      Alert.alert('Error', 'Please enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+
+      if (error) throw error;
+
+      Alert.alert(
+        'Password Reset',
+        'If an account exists with this email, you will receive a password reset link.'
+      );
+    } catch (error) {
+      Alert.alert('Error', error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <ImageBackground
+      source={{ uri: 'https://picsum.photos/800/1600' }}
+      resizeMode="cover"
+      style={styles.background}
     >
-      <Animated.View entering={FadeInDown.duration(1000)} style={styles.formContainer}>
-        <Text style={styles.title}>Welcome to Village Banking</Text>
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <Animated.View entering={FadeInDown.duration(800)} style={styles.formContainer}>
+          <Text style={styles.title}>Login</Text>
 
-        <View style={styles.inputContainer}>
-          <Ionicons name="mail-outline" size={20} color="#555" style={styles.icon} />
-          <TextInput
-            placeholder="Email"
-            placeholderTextColor="#aaa"
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-          />
-        </View>
+          <View style={styles.inputContainer}>
+            <Ionicons name="mail-outline" size={20} color="#555" style={styles.icon} />
+            <TextInput
+              placeholder="Email"
+              placeholderTextColor="#aaa"
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+          </View>
 
-        <View style={styles.inputContainer}>
-          <Ionicons name="lock-closed-outline" size={20} color="#555" style={styles.icon} />
-          <TextInput
-            placeholder="Password"
-            placeholderTextColor="#aaa"
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-        </View>
+          <View style={styles.inputContainer}>
+            <Ionicons name="lock-closed-outline" size={20} color="#555" style={styles.icon} />
+            <TextInput
+              placeholder="Password"
+              placeholderTextColor="#aaa"
+              style={styles.input}
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
 
-        <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
-          <Text style={styles.buttonText}>
-            {loading ? 'Logging in...' : 'Login'}
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleLogin}
+            style={[styles.button, loading && { opacity: 0.7 }]}
+            disabled={loading}
+          >
+            <Text style={styles.buttonText}>{loading ? 'Logging in...' : 'Login'}</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-          <Text style={styles.linkText}>Don't have an account? Register</Text>
-        </TouchableOpacity>
-      </Animated.View>
-    </KeyboardAvoidingView>
+          <TouchableOpacity onPress={handlePasswordReset} disabled={loading}>
+            <Text style={styles.forgotPasswordLink}>Forgot Password?</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => navigation.navigate('Register')}>
+            <Text style={styles.registerLink}>
+              Don't have an account? <Text style={styles.linkText}>Register</Text>
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  background: {
     flex: 1,
-    backgroundColor: '#0D1B2A',
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 50, 0.5)',
     justifyContent: 'center',
-    paddingHorizontal: 20,
+    alignItems: 'center',
+    padding: 20,
   },
   formContainer: {
-    backgroundColor: '#1B263B',
-    padding: 20,
-    borderRadius: 16,
+    width: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 20,
+    padding: 25,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 10,
+    shadowRadius: 10,
+    elevation: 5,
   },
   title: {
     fontSize: 26,
-    color: '#E0E1DD',
-    fontWeight: 'bold',
-    marginBottom: 24,
+    fontWeight: '700',
+    color: '#003366',
+    marginBottom: 20,
     textAlign: 'center',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#415A77',
-    borderRadius: 12,
+    borderColor: '#ddd',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginBottom: 15,
     paddingHorizontal: 10,
-    marginBottom: 16,
+    backgroundColor: '#f9f9f9',
   },
   icon: {
     marginRight: 8,
   },
   input: {
     flex: 1,
-    color: '#fff',
-    paddingVertical: 10,
+    height: 45,
+    color: '#333',
   },
   button: {
-    backgroundColor: '#1E96FC',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 16,
+    backgroundColor: '#003366',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 10,
   },
   buttonText: {
+    textAlign: 'center',
     color: '#fff',
-    fontWeight: 'bold',
+    fontWeight: '600',
     fontSize: 16,
   },
-  linkText: {
-    color: '#9DB4C0',
+  forgotPasswordLink: {
+    marginTop: 15,
     textAlign: 'center',
+    color: '#03A9F4',
+    fontWeight: '600',
+  },
+  registerLink: {
+    marginTop: 15,
+    textAlign: 'center',
+    color: '#333',
+  },
+  linkText: {
+    color: '#03A9F4',
+    fontWeight: 'bold',
   },
 });

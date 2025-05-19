@@ -1,165 +1,379 @@
-import { Ionicons } from '@expo/vector-icons';
-import { MotiView } from 'moti';
 import { useEffect, useState } from 'react';
-import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  ImageBackground,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { supabase } from '../SupabaseClient';
 
-const SavingsScreen = () => {
+export default function AddSavingsScreen({ navigation }) {
   const [amount, setAmount] = useState('');
-  const [savingDate, setSavingDate] = useState('');
   const [paymentProof, setPaymentProof] = useState('');
-  const [note, setNote] = useState(''); // optional UI-only field
-  const [savings, setSavings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [userId, setUserId] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [memberInfo, setMemberInfo] = useState(null);
+  const [savingsHistory, setSavingsHistory] = useState([]);
+  const [totalSavings, setTotalSavings] = useState(0);
+  const [isMemberVerified, setIsMemberVerified] = useState(false);
 
+  // Fetch member info and savings history
   useEffect(() => {
-    const fetchUserAndSavings = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserId(user.id);
-        fetchSavings(user.id);
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) throw userError || new Error('User not authenticated');
+
+        // Check if member exists
+        const { data: member, error: memberError } = await supabase
+          .from('members')
+          .select('*')
+          .eq('id', user.id)
+          .single();
+
+        if (memberError || !member) {
+          // Create member if doesn't exist
+          const { error: createError } = await supabase.from('members').upsert({
+            id: user.id,
+            email: user.email,
+            first_name: 'Member',
+            last_name: 'User',
+            phone_number: '0000000000',
+          }, { onConflict: 'id' });
+
+          if (createError) throw createError;
+          setMemberInfo({ id: user.id, first_name: 'Member', last_name: 'User' });
+        } else {
+          setMemberInfo(member);
+          setIsMemberVerified(true);
+        }
+
+        // Fetch savings history (without note field)
+        const { data: savings, error: savingsError } = await supabase
+          .from('savings')
+          .select('amount, saving_date, payment_proof')
+          .eq('member_id', user.id)
+          .order('saving_date', { ascending: false });
+
+        if (savingsError) throw savingsError;
+
+        setSavingsHistory(savings || []);
+        const total = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
+        setTotalSavings(total);
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        Alert.alert('Error', error.message || 'Failed to load member data');
+      } finally {
+        setLoading(false);
       }
     };
-    fetchUserAndSavings();
+
+    fetchData();
   }, []);
 
-  const fetchSavings = async (id) => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('savings')
-      .select('*')
-      .eq('member_id', id)
-      .order('created_at', { ascending: false });
-
-    if (error) Alert.alert('Error fetching savings', error.message);
-    else setSavings(data);
-    setLoading(false);
-  };
-
-  const handleAddSaving = async () => {
-    if (!amount || !savingDate) {
-      Alert.alert('Validation', 'Amount and Saving Date are required.');
+  const handleSubmit = async () => {
+    if (!amount) {
+      Alert.alert('Error', 'Please enter the savings amount');
       return;
     }
 
-    const { error } = await supabase.from('savings').insert([
-      {
-        member_id: userId,
-        amount: parseFloat(amount),
-        saving_date: savingDate,
-        payment_proof: paymentProof || null,
-      },
-    ]);
+    const amountValue = parseFloat(amount);
+    if (isNaN(amountValue) || amountValue <= 0) {
+      Alert.alert('Error', 'Please enter a valid amount');
+      return;
+    }
 
-    if (error) {
-      Alert.alert('Error', error.message);
-    } else {
-      Alert.alert('Success', 'Saving recorded.');
+    setLoading(true);
+
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) throw userError || new Error('User not authenticated');
+
+      const { error } = await supabase.from('savings').insert({
+        member_id: user.id,
+        amount: amountValue,
+        saving_date: new Date().toISOString(),
+        payment_proof: paymentProof || null,
+      });
+
+      if (error) throw error;
+
+      // Refresh data after successful submission
+      const { data: savings } = await supabase
+        .from('savings')
+        .select('amount, saving_date, payment_proof')
+        .eq('member_id', user.id);
+
+      const newTotal = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
+      setTotalSavings(newTotal);
+      setSavingsHistory(prev => [
+        {
+          amount: amountValue,
+          saving_date: new Date().toISOString(),
+          payment_proof: paymentProof || null
+        },
+        ...prev
+      ]);
+
+      Alert.alert('Success', 'Savings recorded successfully!');
       setAmount('');
-      setSavingDate('');
       setPaymentProof('');
-      setNote('');
-      fetchSavings(userId);
+    } catch (error) {
+      console.error('Save error:', error);
+      Alert.alert('Error', error.message || 'Could not save your savings entry.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const renderSaving = ({ item }) => (
-    <MotiView
-      from={{ opacity: 0, translateY: 20 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: 'timing', duration: 500 }}
-      style={styles.card}
-    >
-      <Text style={styles.cardText}>K{item.amount}</Text>
-      <Text style={styles.cardSub}>{item.saving_date?.split('T')[0]}</Text>
-      {item.payment_proof ? <Text style={styles.cardNote}>Proof: {item.payment_proof}</Text> : null}
-    </MotiView>
-  );
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-ZM', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Add Saving</Text>
+    <ImageBackground
+      source={{ uri: 'https://picsum.photos/900/1600' }}
+      style={styles.background}
+      blurRadius={2}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.container}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContainer}>
+          <View style={styles.overlay}>
+            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+              <Text style={styles.backButtonText}>← Back</Text>
+            </TouchableOpacity>
 
-      <View style={styles.inputContainer}>
-        <Ionicons name="cash-outline" size={20} color="#444" />
-        <TextInput
-          style={styles.input}
-          placeholder="Amount (e.g. 100)"
-          keyboardType="numeric"
-          value={amount}
-          onChangeText={setAmount}
-        />
-      </View>
+            <Text style={styles.title}>Savings Management</Text>
 
-      <View style={styles.inputContainer}>
-        <Ionicons name="calendar-outline" size={20} color="#444" />
-        <TextInput
-          style={styles.input}
-          placeholder="Saving Date (YYYY-MM-DD)"
-          value={savingDate}
-          onChangeText={setSavingDate}
-        />
-      </View>
+            {loading && !memberInfo ? (
+              <ActivityIndicator size="large" color="#0A3D62" style={styles.loader} />
+            ) : (
+              <>
+                <View style={styles.memberInfoContainer}>
+                  <Text style={styles.memberName}>
+                    {memberInfo?.first_name} {memberInfo?.last_name}
+                  </Text>
+                  <View style={styles.verificationBadge}>
+                    <Text style={styles.verificationText}>
+                      {isMemberVerified ? 'Verified Member' : 'New Member'}
+                    </Text>
+                  </View>
+                  <Text style={styles.totalSavings}>
+                    Total Savings: ZMW {totalSavings.toFixed(2)}
+                  </Text>
+                </View>
 
-      <View style={styles.inputContainer}>
-        <Ionicons name="image-outline" size={20} color="#444" />
-        <TextInput
-          style={styles.input}
-          placeholder="Payment Proof (URL optional)"
-          value={paymentProof}
-          onChangeText={setPaymentProof}
-        />
-      </View>
+                <View style={styles.formContainer}>
+                  <Text style={styles.sectionTitle}>Add New Savings</Text>
 
-      <TouchableOpacity style={styles.button} onPress={handleAddSaving}>
-        <Text style={styles.buttonText}>Add Saving</Text>
-      </TouchableOpacity>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Amount (ZMW)"
+                    keyboardType="numeric"
+                    value={amount}
+                    onChangeText={setAmount}
+                  />
 
-      <Text style={styles.subtitle}>Your Saving History</Text>
-      {loading ? (
-        <Text>Loading...</Text>
-      ) : (
-        <FlatList
-          data={savings}
-          keyExtractor={(item) => item.id}
-          renderItem={renderSaving}
-        />
-      )}
-    </View>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Payment Proof (optional)"
+                    value={paymentProof}
+                    onChangeText={setPaymentProof}
+                  />
+
+                  <TouchableOpacity
+                    style={[styles.button, loading ? styles.buttonDisabled : null]}
+                    onPress={handleSubmit}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.buttonText}>Record Savings</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {savingsHistory.length > 0 && (
+                  <View style={styles.historyContainer}>
+                    <Text style={styles.sectionTitle}>Recent Transactions</Text>
+                    {savingsHistory.map((item, index) => (
+                      <View key={index} style={styles.transactionItem}>
+                        <View style={styles.transactionLeft}>
+                          <Text style={styles.transactionDate}>
+                            {formatDate(item.saving_date)}
+                          </Text>
+                          {item.payment_proof && (
+                            <Text style={styles.transactionNote}>
+                              Proof: {item.payment_proof}
+                            </Text>
+                          )}
+                        </View>
+                        <Text style={styles.transactionAmount}>
+                          +ZMW {item.amount.toFixed(2)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
-};
-
-export default SavingsScreen;
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#fff' },
-  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
-  subtitle: { fontSize: 16, fontWeight: '600', marginTop: 20 },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderColor: '#ccc',
-    marginBottom: 12,
-    paddingHorizontal: 5,
+  background: {
+    flex: 1,
+    resizeMode: 'cover',
   },
-  input: { flex: 1, padding: 10 },
-  button: {
-    backgroundColor: '#2e5aac',
-    padding: 12,
-    borderRadius: 8,
+  container: {
+    flex: 1,
+  },
+  scrollContainer: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+  },
+  overlay: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+    padding: 8,
+  },
+  backButtonText: {
+    fontSize: 16,
+    color: '#0A3D62',
+    fontWeight: '600',
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    color: '#0A3D62',
+    textAlign: 'center',
+  },
+  loader: {
+    marginVertical: 40,
+  },
+  memberInfoContainer: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
     alignItems: 'center',
+  },
+  memberName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0A3D62',
+    marginBottom: 5,
+  },
+  verificationBadge: {
+    backgroundColor: '#28a745',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  verificationText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  totalSavings: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0A3D62',
+  },
+  formContainer: {
+    marginBottom: 25,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#0A3D62',
+    marginBottom: 15,
+  },
+  input: {
+    backgroundColor: '#fff',
+    borderColor: '#ddd',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    marginBottom: 15,
+    fontSize: 16,
+  },
+  button: {
+    backgroundColor: '#0A3D62',
+    paddingVertical: 14,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.7,
+  },
+  buttonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  historyContainer: {
     marginTop: 10,
   },
-  buttonText: { color: '#fff', fontWeight: 'bold' },
-  card: {
-    padding: 12,
-    backgroundColor: '#f0f0f0',
-    marginBottom: 10,
-    borderRadius: 8,
+  transactionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
   },
-  cardText: { fontSize: 16, fontWeight: 'bold' },
-  cardSub: { fontSize: 14, color: '#555' },
-  cardNote: { fontSize: 12, color: '#888' },
+  transactionLeft: {
+    flex: 1,
+  },
+  transactionDate: {
+    fontSize: 14,
+    color: '#666',
+  },
+  transactionNote: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 3,
+    fontStyle: 'italic',
+  },
+  transactionAmount: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#28a745',
+  },
 });

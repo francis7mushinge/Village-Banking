@@ -1,16 +1,16 @@
+ 
+ 
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SessionContextProvider } from '@supabase/auth-helpers-react';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, LogBox, View } from 'react-native';
 import { supabase } from './SupabaseClient';
 
-
 // Screens
-import FinesScreen from './Screens/FinesScreen';
 import HomeScreen from './Screens/HomeScreen';
 import LoanApplicationScreen from './Screens/LoanApplicationScreen';
 import LoanRepaymentScreen from './Screens/LoanRepaymentScreen';
@@ -20,23 +20,20 @@ import RegistrationScreen from './Screens/RegistrationScreen';
 import SavingsScreen from './Screens/SavingsScreen';
 import SettingsScreen from './Screens/SettingsScreen';
 
-// Suppress irrelevant logs
 LogBox.ignoreLogs(['Setting a timer']);
-
-// Keep splash screen until fonts/assets load
 SplashScreen.preventAutoHideAsync();
 
-const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator();
 
-function AppTabs() {
+function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#2e5aac',
-        tabBarInactiveTintColor: '#a0aec0',
-        tabBarStyle: { backgroundColor: '#f8f9fa', paddingBottom: 5 },
+        tabBarInactiveTintColor: '#aaa',
+        tabBarStyle: { backgroundColor: '#f8f9fa', paddingBottom: 4 },
       }}
     >
       <Tab.Screen
@@ -50,7 +47,9 @@ function AppTabs() {
         name="Savings"
         component={SavingsScreen}
         options={{
-          tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="piggy-bank" size={size} color={color} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="piggy-bank" size={size} color={color} />
+          ),
         }}
       />
       <Tab.Screen
@@ -81,22 +80,57 @@ function AppTabs() {
 export default function App() {
   const [session, setSession] = useState(null);
   const [appReady, setAppReady] = useState(false);
+  const [, setRole] = useState(null);
 
-  useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+  const initialize = useCallback(async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       setSession(session);
 
-      supabase.auth.onAuthStateChange((_event, session) => {
-        setSession(session);
-      });
+      if (session?.user?.id) {
+        const { data: userData, error } = await supabase
+          .from('members')
+          .select('role')
+          .eq('id', session.user.id)
+          .single();
+
+        if (error) {
+          console.error('Error fetching role:', error.message);
+        } else {
+          setRole(userData.role);
+        }
+      }
+
+      const { data: authListener } = supabase.auth.onAuthStateChange(
+        async (_event, session) => {
+          setSession(session);
+          if (session?.user?.id) {
+            const { data: userData, error } = await supabase
+              .from('members')
+              .select('role')
+              .eq('id', session.user.id)
+              .single();
+            if (!error) setRole(userData.role);
+          }
+        }
+      );
 
       setAppReady(true);
       await SplashScreen.hideAsync();
-    };
 
-    init();
+      return () => {
+        authListener?.subscription.unsubscribe();
+      };
+    } catch (error) {
+      console.error('Initialization error:', error);
+    }
   }, []);
+
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
 
   if (!appReady) {
     return (
@@ -117,9 +151,9 @@ export default function App() {
             </>
           ) : (
             <>
-              <Stack.Screen name="Tabs" component={AppTabs} />
+              <Stack.Screen name="MainTabs" component={MainTabs} />
               <Stack.Screen name="Meetings" component={MeetingsScreen} />
-              <Stack.Screen name="Fines" component={FinesScreen} />
+
             </>
           )}
         </Stack.Navigator>
