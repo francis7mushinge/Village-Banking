@@ -81,7 +81,7 @@ const HomeScreen = () => {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.header}>Welcome, {profile?.name || 'Member'}</Text>
+      <Text style={styles.header}>Welcome {profile?.name || 'Member'}</Text>
 
       <View style={styles.card}>
         <Ionicons name="wallet" size={24} color="#03A9F4" />
@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   header: {
-    fontSize: 24,
+    fontSize: 35,
     fontWeight: 'bold',
     marginBottom: 20,
     color: '#E0E6F3', // Light text on dark background
