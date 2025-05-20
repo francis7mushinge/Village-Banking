@@ -19,11 +19,10 @@ export default function AddSavingsScreen({ navigation }) {
   const [paymentProof, setPaymentProof] = useState('');
   const [loading, setLoading] = useState(false);
   const [memberInfo, setMemberInfo] = useState(null);
-  const [savingsHistory, setSavingsHistory] = useState([]);
   const [totalSavings, setTotalSavings] = useState(0);
   const [isMemberVerified, setIsMemberVerified] = useState(false);
 
-  // Fetch member info and savings history
+  // Fetch member info and total savings
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -55,16 +54,14 @@ export default function AddSavingsScreen({ navigation }) {
           setIsMemberVerified(true);
         }
 
-        // Fetch savings history (without note field)
+        // Fetch total savings only
         const { data: savings, error: savingsError } = await supabase
           .from('savings')
-          .select('amount, saving_date, payment_proof')
-          .eq('member_id', user.id)
-          .order('saving_date', { ascending: false });
+          .select('amount')
+          .eq('member_id', user.id);
 
         if (savingsError) throw savingsError;
 
-        setSavingsHistory(savings || []);
         const total = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
         setTotalSavings(total);
       } catch (error) {
@@ -105,22 +102,14 @@ export default function AddSavingsScreen({ navigation }) {
 
       if (error) throw error;
 
-      // Refresh data after successful submission
+      // Refresh total savings after successful submission
       const { data: savings } = await supabase
         .from('savings')
-        .select('amount, saving_date, payment_proof')
+        .select('amount')
         .eq('member_id', user.id);
 
       const newTotal = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
       setTotalSavings(newTotal);
-      setSavingsHistory(prev => [
-        {
-          amount: amountValue,
-          saving_date: new Date().toISOString(),
-          payment_proof: paymentProof || null
-        },
-        ...prev
-      ]);
 
       Alert.alert('Success', 'Savings recorded successfully!');
       setAmount('');
@@ -131,15 +120,6 @@ export default function AddSavingsScreen({ navigation }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-ZM', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    });
   };
 
   return (
@@ -209,28 +189,7 @@ export default function AddSavingsScreen({ navigation }) {
                   </TouchableOpacity>
                 </View>
 
-                {savingsHistory.length > 0 && (
-                  <View style={styles.historyContainer}>
-                    <Text style={styles.sectionTitle}>Recent Transactions</Text>
-                    {savingsHistory.map((item, index) => (
-                      <View key={index} style={styles.transactionItem}>
-                        <View style={styles.transactionLeft}>
-                          <Text style={styles.transactionDate}>
-                            {formatDate(item.saving_date)}
-                          </Text>
-                          {item.payment_proof && (
-                            <Text style={styles.transactionNote}>
-                              Proof: {item.payment_proof}
-                            </Text>
-                          )}
-                        </View>
-                        <Text style={styles.transactionAmount}>
-                          +ZMW {item.amount.toFixed(2)}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
+                {/* Removed the Recent Transactions section */}
               </>
             )}
           </View>
@@ -240,6 +199,7 @@ export default function AddSavingsScreen({ navigation }) {
   );
 }
 
+// Keep all your existing styles exactly the same
 const styles = StyleSheet.create({
   background: {
     flex: 1,
@@ -347,6 +307,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 16,
   },
+  // You can keep these styles or remove them since they're no longer used
   historyContainer: {
     marginTop: 10,
   },

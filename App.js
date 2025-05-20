@@ -11,6 +11,7 @@ import { ActivityIndicator, LogBox, View } from 'react-native';
 import { supabase } from './SupabaseClient';
 
 // Screens
+import HistoryScreen from './Screens/HistoryScreen';
 import HomeScreen from './Screens/HomeScreen';
 import LoanApplicationScreen from './Screens/LoanApplicationScreen';
 import LoanRepaymentScreen from './Screens/LoanRepaymentScreen';
@@ -67,12 +68,20 @@ function MainTabs() {
         }}
       />
       <Tab.Screen
+        name="History"
+        component={HistoryScreen}
+        options={{
+          tabBarIcon: ({ color, size }) => <Ionicons name="time-outline" size={size} color={color} />,
+        }}
+      />
+      <Tab.Screen
         name="Settings"
         component={SettingsScreen}
         options={{
           tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} />,
         }}
       />
+      
     </Tab.Navigator>
   );
 }
