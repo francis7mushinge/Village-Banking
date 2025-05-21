@@ -21,7 +21,7 @@ export default function SettingsScreen() {
   const [loading, setLoading] = useState(true);
   const [editable, setEditable] = useState(false);
   const [settings, setSettings] = useState({
-    interest_rate: '15.00',
+    loan_interest_rate: '15.00',
     max_loan_multiplier: '3.0',
     min_required_savings: '100.00',
     cycle_tenure_months: '12'
@@ -31,20 +31,32 @@ export default function SettingsScreen() {
   useEffect(() => {
     const fetchSettings = async () => {
       try {
+        // First get the count to handle single/multiple rows
+        const { count } = await supabase
+          .from('settings')
+          .select('*', { count: 'exact', head: true });
+
+        if (count === 0) {
+          // No settings exist, use defaults
+          return;
+        }
+
+        // Get the most recent settings
         const { data, error } = await supabase
           .from('settings')
-          .select('*')
+          .select('loan_interest_rate, max_loan_multiplier, min_required_savings, cycle_tenure_months')
           .order('created_at', { ascending: false })
-          .limit(1);
+          .limit(1)
+          .single(); // Ensures we only get one row
 
         if (error) throw error;
         
-        if (data && data.length > 0) {
+        if (data) {
           setSettings({
-            interest_rate: data[0].interest_rate.toString(),
-            max_loan_multiplier: data[0].max_loan_multiplier.toString(),
-            min_required_savings: data[0].min_required_savings.toString(),
-            cycle_tenure_months: data[0].cycle_tenure_months.toString()
+            loan_interest_rate: data.loan_interest_rate?.toString() || '15.00',
+            max_loan_multiplier: data.max_loan_multiplier?.toString() || '3.0',
+            min_required_savings: data.min_required_savings?.toString() || '100.00',
+            cycle_tenure_months: data.cycle_tenure_months?.toString() || '12'
           });
         }
       } catch (error) {
@@ -61,7 +73,7 @@ export default function SettingsScreen() {
   const handleSaveSettings = async () => {
     // Validate inputs
     const newSettings = {
-      interest_rate: parseFloat(settings.interest_rate),
+      loan_interest_rate: parseFloat(settings.loan_interest_rate),
       max_loan_multiplier: parseFloat(settings.max_loan_multiplier),
       min_required_savings: parseFloat(settings.min_required_savings),
       cycle_tenure_months: parseInt(settings.cycle_tenure_months)
@@ -128,7 +140,7 @@ export default function SettingsScreen() {
         ) : (
           <>
             <View style={styles.settingsCard}>
-              {renderSettingInput('Interest Rate', 'interest_rate', '%')}
+              {renderSettingInput('loan_Interest Rate', 'loan_interest_rate', '%')}
               {renderSettingInput('Max Loan Multiplier', 'max_loan_multiplier', 'x')}
               {renderSettingInput('Min Required Savings', 'min_required_savings', ' ZMW')}
               {renderSettingInput('Cycle Tenure', 'cycle_tenure_months', ' months')}

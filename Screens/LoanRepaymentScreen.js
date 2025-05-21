@@ -3,12 +3,13 @@ import {
   ActivityIndicator,
   Alert,
   ImageBackground,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { supabase } from '../SupabaseClient';
 
@@ -16,128 +17,177 @@ const LoanRepaymentScreen = () => {
   const [activeLoan, setActiveLoan] = useState(null);
   const [repaymentAmount, setRepaymentAmount] = useState('');
   const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchActiveLoan = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: loans, error } = await supabase
+        .from('loans')
+        .select('*')
+        .eq('member_id', user.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+      
+      setActiveLoan(loans?.[0] || null);
+      
+    } catch (error) {
+      console.error('Error fetching active loan:', error);
+      Alert.alert('Error', 'Failed to load loan information');
+      setActiveLoan(null);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchActiveLoan = async () => {
-      setLoading(true);
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        const { data: loan, error } = await supabase
-          .from('loans')
-          .select('*')
-          .eq('member_id', user.id)
-          .eq('status', 'active')
-          .single();
-
-        if (error) throw error;
-        setActiveLoan(loan);
-      } catch (error) {
-        console.error('Error fetching active loan:', error);
-        Alert.alert('Error', 'Failed to load active loan');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchActiveLoan();
   }, []);
 
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchActiveLoan();
+  };
+
   const handleRepayment = async () => {
-  if (!activeLoan) return;
+    if (!activeLoan) return;
+    if (!repaymentAmount) {
+      Alert.alert('Error', 'Please enter a repayment amount');
+      return;
+    }
 
-  const minRepayment = activeLoan.monthly_repayment || 0;
-  const amount = parseFloat(repaymentAmount);
+    const amount = parseFloat(repaymentAmount);
+    const minRepayment = activeLoan.monthly_repayment || 0;
+    const outstanding = parseFloat(activeLoan.outstanding_amount);
+    
+    const EPSILON = 0.001;
+    const isFinalPayment = Math.abs(amount - outstanding) < EPSILON;
 
-  if (isNaN(amount) || amount < minRepayment) {
-    Alert.alert(
-      'Invalid Repayment',
-      `Repayment must be a number and not less than the minimum monthly repayment of ZMW ${minRepayment.toFixed(2)}`
-    );
-    return;
-  }
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('Error', 'Please enter a valid positive amount');
+      return;
+    }
 
-  if (amount > activeLoan.outstanding_amount) {
-    Alert.alert(
-      'Invalid Repayment',
-      `Repayment cannot exceed the outstanding amount of ZMW ${activeLoan.outstanding_amount.toFixed(2)}`
-    );
-    return;
-  }
+    if (!isFinalPayment && amount < minRepayment) {
+      Alert.alert(
+        'Invalid Repayment',
+        `Regular repayment must be at least ZMW ${minRepayment.toFixed(2)}\n` +
+        `Or pay the full outstanding amount of ZMW ${outstanding.toFixed(2)}`
+      );
+      return;
+    }
 
-  try {
-    setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('User not authenticated');
+    if (amount > outstanding + EPSILON) {
+      Alert.alert(
+        'Invalid Repayment',
+        `Amount exceeds outstanding balance of ZMW ${outstanding.toFixed(2)}`
+      );
+      return;
+    }
 
-    // Calculate interest portion of repayment
-    const interestRateDecimal = activeLoan.interest_rate / 100;
-    // Simplified interest portion: interest_rate * (repayment amount / total repayment)
-    // Or proportional interest on outstanding amount
-    // For simplicity, assume interest on current repayment proportional to remaining outstanding
-    const interestPortion = amount * (interestRateDecimal / (1 + interestRateDecimal));
-    const interestRounded = parseFloat(interestPortion.toFixed(2));
+    setProcessing(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
 
-    // Insert repayment record
-    const { error: insertError } = await supabase.from('loan_repayments').insert([
-      {
-        loan_id: activeLoan.id,
-        member_id: user.id,
-        amount,
-        repayment_date: new Date().toISOString(),
-      },
-    ]);
-    if (insertError) throw insertError;
+      const paymentAmount = isFinalPayment ? outstanding : amount;
+      const interestRate = activeLoan.interest_rate / 100;
+      const interestPortion = (paymentAmount * interestRate) / (1 + interestRate);
+      const principalPortion = paymentAmount - interestPortion;
 
-    // Add interest portion to savings
-    const { error: savingsError } = await supabase.from('savings').insert([
-      {
-        member_id: user.id,
-        amount: interestRounded,
-        saving_date: new Date().toISOString(),
-        note: 'Interest from loan repayment',
-      },
-    ]);
-    if (savingsError) throw savingsError;
+      const { error: repaymentError } = await supabase
+        .from('loan_repayments')
+        .insert({
+          loan_id: activeLoan.id,
+          member_id: user.id,
+          amount: paymentAmount,
+          principal_amount: principalPortion,
+          interest_amount: interestPortion,
+          repayment_date: new Date().toISOString(),
+          is_final_payment: isFinalPayment
+        });
 
-    // Update loan outstanding_amount and status if fully paid
-    const newOutstanding = activeLoan.outstanding_amount - amount;
-    const newStatus = newOutstanding <= 0 ? 'paid' : 'active';
+      if (repaymentError) throw repaymentError;
 
-    const { error: updateError } = await supabase
-      .from('loans')
-      .update({
+      const newOutstanding = isFinalPayment ? 0 : outstanding - paymentAmount;
+      const newStatus = isFinalPayment ? 'paid' : 'active';
+
+      const { error: updateError } = await supabase
+        .from('loans')
+        .update({
+          outstanding_amount: newOutstanding,
+          status: newStatus
+        })
+        .eq('id', activeLoan.id);
+
+      if (updateError) throw updateError;
+
+      if (interestPortion > 0) {
+        const { error: savingsError } = await supabase
+          .from('savings')
+          .insert({
+            member_id: user.id,
+            amount: interestPortion,
+            transaction_type: 'interest_earned',
+            loan_id: activeLoan.id
+          });
+
+        if (savingsError) throw savingsError;
+      }
+
+      Alert.alert(
+        'Success', 
+        `Repayment of ZMW ${paymentAmount.toFixed(2)} processed successfully.\n` +
+        `(Principal: ZMW ${principalPortion.toFixed(2)}, Interest: ZMW ${interestPortion.toFixed(2)})` +
+        (isFinalPayment ? '\nLoan fully paid!' : ''),
+        [
+          {
+            text: 'OK',
+            onPress: () => fetchActiveLoan() // Refresh data after alert is dismissed
+          }
+        ]
+      );
+
+      setActiveLoan(prev => ({
+        ...prev,
         outstanding_amount: newOutstanding,
-        status: newStatus,
-      })
-      .eq('id', activeLoan.id);
+        status: newStatus
+      }));
+      setRepaymentAmount('');
 
-    if (updateError) throw updateError;
-
-    Alert.alert('Success', `Repayment successful. Interest ZMW ${interestRounded} added to your savings.`);
-
-    // Update local state for UI
-    setActiveLoan(prev => ({
-      ...prev,
-      outstanding_amount: newOutstanding,
-      status: newStatus,
-    }));
-    setRepaymentAmount('');
-  } catch (error) {
-    console.error('Repayment error:', error);
-    Alert.alert('Error', 'Failed to submit repayment');
-  } finally {
-    setLoading(false);
-  }
-};
+    } catch (error) {
+      console.error('Repayment error:', error);
+      Alert.alert('Error', error.message || 'Failed to process repayment');
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   return (
     <ImageBackground
       source={{ uri: 'https://picsum.photos/900/1600' }}
       style={styles.background}
+      blurRadius={2}
     >
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView 
+        contentContainerStyle={styles.container}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#fff"
+            title="Refreshing..."
+            titleColor="#fff"
+          />
+        }
+      >
         <Text style={styles.title}>Loan Repayment</Text>
 
         {loading ? (
@@ -145,53 +195,59 @@ const LoanRepaymentScreen = () => {
         ) : activeLoan ? (
           <View style={styles.card}>
             <Text style={styles.summaryTitle}>Loan Details</Text>
+            
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Loan Amount:</Text>
-              <Text style={styles.summaryValue}>ZMW {activeLoan.loan_amount.toFixed(2)}</Text>
+              <Text style={styles.summaryValue}>ZMW {activeLoan.loan_amount?.toFixed(2) || '0.00'}</Text>
             </View>
+            
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Outstanding Balance:</Text>
+              <Text style={styles.summaryValue}>ZMW {activeLoan.outstanding_amount?.toFixed(2) || '0.00'}</Text>
+            </View>
+            
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Monthly Payment:</Text>
-              <Text style={styles.summaryValue}>ZMW {activeLoan.monthly_repayment?.toFixed(2) || 'N/A'}</Text>
+              <Text style={styles.summaryValue}>ZMW {activeLoan.monthly_repayment?.toFixed(2) || '0.00'}</Text>
             </View>
+            
             <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Outstanding Amount:</Text>
-              <Text style={styles.summaryValue}>ZMW {activeLoan.outstanding_amount?.toFixed(2) || 'N/A'}</Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Due Date:</Text>
-              <Text style={styles.summaryValue}>
-                {activeLoan.repayment_due_date
-                  ? new Date(activeLoan.repayment_due_date).toLocaleDateString()
-                  : 'N/A'}
-              </Text>
+              <Text style={styles.summaryLabel}>Interest Rate:</Text>
+              <Text style={styles.summaryValue}>{activeLoan.interest_rate?.toFixed(2) || '0'}%</Text>
             </View>
 
             <TextInput
               style={styles.input}
-              placeholder={`Repayment Amount (min ZMW ${activeLoan.monthly_repayment.toFixed(2)})`}
-              placeholderTextColor="#ccc"
+              placeholder={`Enter amount (min ZMW ${activeLoan.monthly_repayment?.toFixed(2) || '0.00'})`}
               keyboardType="numeric"
               value={repaymentAmount}
               onChangeText={setRepaymentAmount}
+              placeholderTextColor="#999"
             />
 
             <TouchableOpacity
-              style={styles.button}
+              style={[styles.button, processing && styles.buttonDisabled]}
               onPress={handleRepayment}
+              disabled={processing}
             >
-              <Text style={styles.buttonText}>Submit Repayment</Text>
+              {processing ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>Submit Repayment</Text>
+              )}
             </TouchableOpacity>
           </View>
         ) : (
-          <Text style={{ color: '#fff', textAlign: 'center', marginTop: 40 }}>
-            No active loan found.
-          </Text>
+          <View style={styles.noLoanCard}>
+            <Text style={styles.noLoanText}>No active loan found</Text>
+          </View>
         )}
       </ScrollView>
     </ImageBackground>
   );
 };
 
+// Keep all your existing styles exactly the same
 const styles = StyleSheet.create({
   background: {
     flex: 1,
@@ -199,67 +255,80 @@ const styles = StyleSheet.create({
   },
   container: {
     padding: 20,
-    paddingTop: 60,
+    paddingTop: 40,
   },
   title: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 20,
-    alignSelf: 'center',
-    textShadowColor: '#000',
-    textShadowOffset: { width: 0, height: 1 },
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 3,
   },
   card: {
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 10,
+    padding: 20,
     marginBottom: 20,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1,
   },
   summaryTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#0A3D62',
-    marginBottom: 12,
+    marginBottom: 15,
+    textAlign: 'center',
   },
   summaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginVertical: 6,
+    marginVertical: 8,
   },
   summaryLabel: {
-    fontWeight: '600',
-    color: '#444',
+    fontSize: 16,
+    color: '#333',
   },
   summaryValue: {
     fontSize: 16,
-    color: '#333',
+    fontWeight: '600',
+    color: '#0A3D62',
   },
   input: {
-    backgroundColor: '#f1f1f1',
+    height: 50,
+    borderColor: '#ddd',
+    borderWidth: 1,
     borderRadius: 8,
-    padding: 12,
+    paddingHorizontal: 15,
     marginTop: 20,
+    marginBottom: 15,
     fontSize: 16,
-    color: '#333',
+    backgroundColor: '#fff',
   },
   button: {
     backgroundColor: '#0A3D62',
-    padding: 14,
+    padding: 15,
     borderRadius: 8,
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 10,
+  },
+  buttonDisabled: {
+    backgroundColor: '#6c7a89',
   },
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  noLoanCard: {
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    padding: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  noLoanText: {
+    fontSize: 16,
+    color: '#333',
   },
 });
 

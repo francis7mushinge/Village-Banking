@@ -31,19 +31,21 @@ const HistoryScreen = ({ navigation }) => {
 
         if (savingsError) throw savingsError;
 
-        // Fetch loans with their repayments - CORRECTED QUERY
+        // Fetch loans with their repayments
         const { data: loansData, error: loansError } = await supabase
           .from('loans')
           .select(`
             id,
             loan_amount,
+            created_at,
             loan_repayments(
               id,
               amount,
               repayment_date
             )
           `)
-          .eq('member_id', userId);
+          .eq('member_id', userId)
+          .order('created_at', { ascending: false });
 
         if (loansError) throw loansError;
 
@@ -58,17 +60,29 @@ const HistoryScreen = ({ navigation }) => {
           color: '#4DABF7'
         }));
 
-        // Process loan repayments
-        let formattedRepayments = [];
+        // Process loans and their repayments
+        let formattedLoans = [];
         (loansData || []).forEach(loan => {
+          // Add the loan issuance itself
+          formattedLoans.push({
+            id: `loan_${loan.id}`,
+            type: 'loan_issued',
+            date: new Date(loan.created_at),
+            amount: parseFloat(loan.loan_amount),
+            title: 'Loan Received',
+            icon: 'cash-outline',
+            color: '#FCC419'
+          });
+
+          // Add repayments
           (loan.loan_repayments || []).forEach(payment => {
-            formattedRepayments.push({
-              id: `repayment_${payment.id}`,
-              type: 'repayment',
+            formattedLoans.push({
+              id: `loan_repayment_${payment.id}`,
+              type: 'loan_repayments',
               date: new Date(payment.repayment_date),
               amount: parseFloat(payment.amount),
-              title: `Loan Payment`,
-              loanAmount: loan.loan_amount,
+              title: 'Loan Repayment',
+              loanAmount: parseFloat(loan.loan_amount),
               icon: 'arrow-up-circle',
               color: '#69DB7C'
             });
@@ -76,13 +90,13 @@ const HistoryScreen = ({ navigation }) => {
         });
 
         // Combine and sort all transactions
-        const allTransactions = [...formattedSavings, ...formattedRepayments]
+        const allTransactions = [...formattedSavings, ...formattedLoans]
           .sort((a, b) => b.date - a.date);
 
         setTransactions(allTransactions);
       } catch (err) {
         console.error('Failed to fetch transactions:', err);
-        setError('Failed to load transaction history. Please check your internet connection and try again.');
+        setError('Failed to load transaction history. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -95,7 +109,7 @@ const HistoryScreen = ({ navigation }) => {
   const filteredTransactions = transactions.filter(t => 
     activeTab === 'all' || 
     (activeTab === 'savings' && t.type === 'savings') ||
-    (activeTab === 'loans' && t.type === 'repayment')
+    (activeTab === 'loans' && (t.type === 'loan_repayments' || t.type === 'loan_issued'))
   );
 
   // Group by date for SectionList
@@ -118,13 +132,17 @@ const HistoryScreen = ({ navigation }) => {
   const renderTransactionItem = ({ item }) => (
     <View style={styles.transactionCard}>
       <View style={styles.transactionIcon}>
-        <Ionicons name={item.icon} size={24} color={item.color} />
+        <Ionicons 
+          name={item.icon} 
+          size={24} 
+          color={item.type === 'loan_issued' ? '#FCC419' : item.color} 
+        />
       </View>
       <View style={styles.transactionDetails}>
         <Text style={styles.transactionTitle}>{item.title}</Text>
         {item.loanAmount && (
           <Text style={styles.transactionSubtitle}>
-            Loan: ZMW {item.loanAmount.toFixed(2)}
+            {item.type === 'loan_issued' ? 'Amount' : 'For Loan'}: ZMW {item.loanAmount.toFixed(2)}
           </Text>
         )}
         <Text style={styles.transactionTime}>
@@ -133,9 +151,13 @@ const HistoryScreen = ({ navigation }) => {
       </View>
       <Text style={[
         styles.transactionAmount,
-        { color: item.type === 'savings' ? '#4DABF7' : '#69DB7C' }
+        { 
+          color: item.type === 'savings' ? '#4DABF7' : 
+                item.type === 'loan_issued' ? '#FCC419' : '#69DB7C' 
+        }
       ]}>
-        {item.type === 'savings' ? '+' : '-'}ZMW {item.amount.toFixed(2)}
+        {item.type === 'savings' ? '+' : 
+         item.type === 'loan_issued' ? '+' : '-'}ZMW {item.amount.toFixed(2)}
       </Text>
     </View>
   );
@@ -183,6 +205,7 @@ const HistoryScreen = ({ navigation }) => {
             onPress={() => {
               setLoading(true);
               setError(null);
+              fetchTransactionHistory();
             }}
           >
             <Text style={styles.retryButtonText}>Try Again</Text>

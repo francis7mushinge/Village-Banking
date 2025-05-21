@@ -1,206 +1,274 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../SupabaseClient';
 
 const HomeScreen = () => {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [profile, setProfile] = useState(null);
   const [savings, setSavings] = useState(0);
   const [loan, setLoan] = useState(null);
   const [loanPayments, setLoanPayments] = useState(0);
   const [loanProgress, setLoanProgress] = useState(0);
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        
-        // 1. Get user session
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError) throw sessionError;
-        if (!session?.user) return;
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      // 1. Get user session
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!session?.user) return;
 
-        const userId = session.user.id;
+      const userId = session.user.id;
 
-        // 2. Fetch profile data
-        const { data: memberData, error: profileError } = await supabase
-          .from('members')
-          .select('*')
-          .eq('id', userId)
-          .single();
-        
-        if (profileError) throw profileError;
-        setProfile(memberData);
+      // 2. Fetch profile data
+      const { data: memberData, error: profileError } = await supabase
+        .from('members')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      
+      if (profileError) throw profileError;
+      setProfile(memberData);
 
-        // 3. Fetch savings data
-        const { data: savingsData, error: savingsError } = await supabase
-          .from('savings')
+      // 3. Fetch savings data
+      const { data: savingsData, error: savingsError } = await supabase
+        .from('savings')
+        .select('amount')
+        .eq('member_id', userId);
+      
+      if (savingsError) throw savingsError;
+      const totalSavings = savingsData?.reduce((sum, entry) => sum + parseFloat(entry.amount), 0) || 0;
+      setSavings(totalSavings);
+
+      // 4. Fetch most recent loan
+      const { data: loansData, error: loansError } = await supabase
+        .from('loans')
+        .select('*')
+        .eq('member_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      
+      if (loansError) throw loansError;
+
+      if (loansData?.length > 0) {
+        const currentLoan = loansData[0];
+
+        // 5. Fetch payments for this loan
+        const { data: paymentsData, error: paymentsError } = await supabase
+          .from('loan_repayments')
           .select('amount')
-          .eq('member_id', userId);
+          .eq('loan_id', currentLoan.id);
         
-        if (savingsError) throw savingsError;
-        const totalSavings = savingsData?.reduce((sum, entry) => sum + parseFloat(entry.amount), 0) || 0;
-        setSavings(totalSavings);
+        if (paymentsError) throw paymentsError;
 
-        // 4. Fetch most recent loan (using start_date instead of created_at)
-        const { data: loansData, error: loansError } = await supabase
-          .from('loans')
-          .select('*')
-          .eq('member_id', userId)
-          .order('start_date', { ascending: false })
-          .limit(1);
-        
-        if (loansError) throw loansError;
+        const totalPaid = paymentsData?.reduce((sum, p) => sum + parseFloat(p.amount), 0) || 0;
+        const outstanding = currentLoan.total_repayment - totalPaid;
 
-        if (loansData?.length > 0) {
-          const currentLoan = loansData[0];
+        setLoanPayments(totalPaid);
+        setLoan({ 
+          ...currentLoan, 
+          outstanding_amount: outstanding,
+          formatted_start_date: new Date(currentLoan.start_date).toLocaleDateString(),
+          formatted_due_date: new Date(currentLoan.repayment_due_date).toLocaleDateString()
+        });
 
-          // 5. Fetch payments for this loan
-          const { data: paymentsData, error: paymentsError } = await supabase
-            .from('loan_repayments')
-            .select('amount')
-            .eq('loan_id', currentLoan.id);
-          
-          if (paymentsError) throw paymentsError;
-
-          const totalPaid = paymentsData?.reduce((sum, p) => sum + parseFloat(p.amount), 0) || 0;
-          const outstanding = currentLoan.total_repayment - totalPaid;
-
-          setLoanPayments(totalPaid);
-          setLoan({ 
-            ...currentLoan, 
-            outstanding_amount: outstanding,
-            // Format dates for display
-            formatted_start_date: new Date(currentLoan.start_date).toLocaleDateString(),
-            formatted_due_date: new Date(currentLoan.repayment_due_date).toLocaleDateString()
-          });
-
-          const progress = (totalPaid / currentLoan.total_repayment) * 100;
-          setLoanProgress(progress > 100 ? 100 : progress);
-        }
-      } catch (err) {
-        console.error('Error fetching data:', err);
-      } finally {
-        setLoading(false);
+        const progress = (totalPaid / currentLoan.total_repayment) * 100;
+        setLoanProgress(progress > 100 ? 100 : progress);
+      } else {
+        setLoan(null);
+        setLoanPayments(0);
+        setLoanProgress(0);
       }
-    };
-
-    fetchData();
+    } catch (err) {
+      console.error('Error fetching data:', err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
-  if (loading) {
+  useEffect(() => {
+    if (isFocused) {
+      fetchData();
+    }
+  }, [isFocused, fetchData]);
+
+  useEffect(() => {
+    // Set up realtime subscriptions
+    const userId = supabase.auth.getSession()?.user?.id;
+    if (!userId) return;
+
+    // Subscribe to savings changes
+    const savingsSubscription = supabase
+      .channel('savings_changes')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'savings',
+        filter: `member_id=eq.${userId}`
+      }, () => fetchData())
+      .subscribe();
+
+    // Subscribe to loan changes
+    const loansSubscription = supabase
+      .channel('loans_changes')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'loans',
+        filter: `member_id=eq.${userId}`
+      }, () => fetchData())
+      .subscribe();
+
+    // Subscribe to repayment changes
+    const repaymentsSubscription = supabase
+      .channel('repayments_changes')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'loan_repayments',
+        filter: `loan_id=eq.${loan?.id}`
+      }, () => fetchData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(savingsSubscription);
+      supabase.removeChannel(loansSubscription);
+      supabase.removeChannel(repaymentsSubscription);
+    };
+  }, [fetchData, loan?.id]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchData();
+  }, [fetchData]);
+
+  if (loading && !refreshing) {
     return (
       <View style={styles.loader}>
         <ActivityIndicator size="large" color="#03A9F4" />
       </View>
     );
   }
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.header}>Welcome {profile?.first_name || 'Member'}</Text>
 
-      {/* Savings Card */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <Ionicons name="wallet" size={22} color="#4DABF7" />
-          <Text style={styles.cardTitle}>SAVINGS SUMMARY</Text>
-        </View>
-        <View style={styles.valueContainer}>
-          <Text style={styles.label}>Total Balance</Text>
-          <Text style={styles.value}>ZMW {savings.toFixed(2)}</Text>
-        </View>
+ return (
+  <ScrollView 
+    contentContainerStyle={styles.container}
+    refreshControl={
+      <RefreshControl 
+        refreshing={refreshing} 
+        onRefresh={onRefresh}
+        colors={['#03A9F4']}
+        tintColor="#03A9F4"
+      />
+    }
+  >
+    <Text style={styles.header}>Welcome {profile?.first_name || 'Member'}</Text>
+
+    {/* Savings Card */}
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <Ionicons name="wallet" size={22} color="#4DABF7" />
+        <Text style={styles.cardTitle}>SAVINGS SUMMARY</Text>
       </View>
+      <View style={styles.valueContainer}>
+        <Text style={styles.label}>Total Balance</Text>
+        <Text style={styles.value}>ZMW {savings.toFixed(2)}</Text>
+      </View>
+    </View>
 
-      {loan ? (
-        <>
-          {/* Loan Details Card */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="cash-outline" size={22} color="#FFD43B" />
-              <Text style={styles.cardTitle}>LOAN DETAILS</Text>
+    {loan ? (
+      <>
+        {/* Loan Details Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="cash-outline" size={22} color="#FFD43B" />
+            <Text style={styles.cardTitle}>LOAN DETAILS</Text>
+          </View>
+          
+          <View style={styles.gridContainer}>
+            <View style={styles.gridItem}>
+              <Text style={styles.label}>Amount</Text>
+              <Text style={styles.value}>ZMW {loan.loan_amount.toFixed(2)}</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.label}>Term</Text>
+              <Text style={styles.value}>{loan.loan_term} months</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.label}>Rate</Text>
+              <Text style={styles.value}>{loan.interest_rate}%</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.label}>Monthly</Text>
+              <Text style={styles.value}>ZMW {loan.monthly_repayment.toFixed(2)}</Text>
+            </View>
+          </View>
+
+          <View style={styles.statusContainer}>
+            <Text style={[
+              styles.statusText,
+              loan.status === 'active' && styles.activeStatus,
+              loan.status === 'paid' && styles.paidStatus
+            ]}>
+              {loan.status.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+
+        {/* Repayment Card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="pricetags" size={22} color="#69DB7C" />
+            <Text style={styles.cardTitle}>REPAYMENT PROGRESS</Text>
+          </View>
+          
+          <View style={styles.progressContainer}>
+            <View style={styles.progressLabels}>
+              <Text style={styles.label}>Paid: ZMW {loanPayments.toFixed(2)}</Text>
+              <Text style={styles.label}>Total: ZMW {loan.total_repayment.toFixed(2)}</Text>
             </View>
             
-            <View style={styles.gridContainer}>
-              <View style={styles.gridItem}>
-                <Text style={styles.label}>Amount</Text>
-                <Text style={styles.value}>ZMW {loan.loan_amount.toFixed(2)}</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.label}>Term</Text>
-                <Text style={styles.value}>{loan.loan_term} months</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.label}>Rate</Text>
-                <Text style={styles.value}>{loan.interest_rate}%</Text>
-              </View>
-              <View style={styles.gridItem}>
-                <Text style={styles.label}>Monthly</Text>
-                <Text style={styles.value}>ZMW {loan.monthly_repayment.toFixed(2)}</Text>
-              </View>
+            <View style={styles.progressBarBackground}>
+              <View style={[styles.progressBar, { width: `${loanProgress}%` }]} />
             </View>
-
-            <View style={styles.statusContainer}>
+            <Text style={styles.progressText}>{loanProgress.toFixed(0)}% Complete</Text>
+            
+            <View style={styles.outstandingContainer}>
+              <Text style={styles.label}>Outstanding Balance</Text>
               <Text style={[
-                styles.statusText,
-                loan.status === 'active' && styles.activeStatus,
-                loan.status === 'paid' && styles.paidStatus
+                styles.outstandingValue,
+                loan.outstanding_amount > 0 ? styles.outstanding : styles.paid
               ]}>
-                {loan.status.toUpperCase()}
+                ZMW {loan.outstanding_amount.toFixed(2)}
               </Text>
             </View>
           </View>
+        </View>
 
-          {/* Repayment Card */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="pricetags" size={22} color="#69DB7C" />
-              <Text style={styles.cardTitle}>REPAYMENT PROGRESS</Text>
-            </View>
-            
-            <View style={styles.progressContainer}>
-              <View style={styles.progressLabels}>
-                <Text style={styles.label}>Paid: ZMW {loanPayments.toFixed(2)}</Text>
-                <Text style={styles.label}>Total: ZMW {loan.total_repayment.toFixed(2)}</Text>
-              </View>
-              
-              <View style={styles.progressBarBackground}>
-                <View style={[styles.progressBar, { width: `${loanProgress}%` }]} />
-              </View>
-              <Text style={styles.progressText}>{loanProgress.toFixed(0)}% Complete</Text>
-              
-              <View style={styles.outstandingContainer}>
-                <Text style={styles.label}>Outstanding Balance</Text>
-                <Text style={[
-                  styles.outstandingValue,
-                  loan.outstanding_amount > 0 ? styles.outstanding : styles.paid
-                ]}>
-                  ZMW {loan.outstanding_amount.toFixed(2)}
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          <TouchableOpacity 
+        <TouchableOpacity 
           style={styles.button} 
           onPress={() => navigation.navigate('History')}
-          >
+        >
           <Text style={styles.buttonText}>View Full History</Text>
           <Ionicons name="arrow-forward" size={18} color="white" />
-          </TouchableOpacity>
-        </>
-      ) : (
-        <View style={styles.noLoanCard}>
-          <Ionicons name="document-text-outline" size={36} color="#5C7C9E" />
-          <Text style={styles.noLoanText}>No Active Loans</Text>
-        </View>
-      )}
-    </ScrollView>
-  );
-};
-
+        </TouchableOpacity>
+      </>
+    ) : (
+      <View style={styles.noLoanCard}>
+        <Ionicons name="document-text-outline" size={36} color="#5C7C9E" />
+        <Text style={styles.noLoanText}>No Active Loans</Text>
+      </View>
+    )}
+  </ScrollView>
+);
+}
 const styles = StyleSheet.create({
   container: {
     padding: 16,

@@ -20,10 +20,29 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.anonymous.MyVillabank"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9c57fa51-42e7-4b72-b382-c563f434bd94"
+      }
+    },
+    "plugins": [
+     [
+      "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "buildToolsVersion": "34.0.0",
+            "ndkVersion": "25.1.8937393"
+          }
+        }
+      ]
+    ]
   }
 }

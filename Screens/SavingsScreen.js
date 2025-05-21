@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   ImageBackground,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,62 +20,90 @@ export default function AddSavingsScreen({ navigation }) {
   const [amount, setAmount] = useState('');
   const [paymentProof, setPaymentProof] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [memberInfo, setMemberInfo] = useState(null);
   const [totalSavings, setTotalSavings] = useState(0);
   const [isMemberVerified, setIsMemberVerified] = useState(false);
+  const isFocused = useIsFocused();
 
   // Fetch member info and total savings
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
-        if (userError || !user) throw userError || new Error('User not authenticated');
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) throw userError || new Error('User not authenticated');
 
-        // Check if member exists
-        const { data: member, error: memberError } = await supabase
-          .from('members')
-          .select('*')
-          .eq('id', user.id)
-          .single();
+      // Check if member exists
+      const { data: member, error: memberError } = await supabase
+        .from('members')
+        .select('*')
+        .eq('id', user.id)
+        .single();
 
-        if (memberError || !member) {
-          // Create member if doesn't exist
-          const { error: createError } = await supabase.from('members').upsert({
-            id: user.id,
-            email: user.email,
-            first_name: 'Member',
-            last_name: 'User',
-            phone_number: '0000000000',
-          }, { onConflict: 'id' });
+      if (memberError || !member) {
+        // Create member if doesn't exist
+        const { error: createError } = await supabase.from('members').upsert({
+          id: user.id,
+          email: user.email,
+          first_name: 'Member',
+          last_name: 'User',
+          phone_number: '0000000000',
+        }, { onConflict: 'id' });
 
-          if (createError) throw createError;
-          setMemberInfo({ id: user.id, first_name: 'Member', last_name: 'User' });
-        } else {
-          setMemberInfo(member);
-          setIsMemberVerified(true);
-        }
-
-        // Fetch total savings only
-        const { data: savings, error: savingsError } = await supabase
-          .from('savings')
-          .select('amount')
-          .eq('member_id', user.id);
-
-        if (savingsError) throw savingsError;
-
-        const total = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
-        setTotalSavings(total);
-      } catch (error) {
-        console.error('Error fetching data:', error);
-        Alert.alert('Error', error.message || 'Failed to load member data');
-      } finally {
-        setLoading(false);
+        if (createError) throw createError;
+        setMemberInfo({ id: user.id, first_name: 'Member', last_name: 'User' });
+      } else {
+        setMemberInfo(member);
+        setIsMemberVerified(true);
       }
-    };
 
-    fetchData();
+      // Fetch total savings only
+      const { data: savings, error: savingsError } = await supabase
+        .from('savings')
+        .select('amount')
+        .eq('member_id', user.id);
+
+      if (savingsError) throw savingsError;
+
+      const total = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
+      setTotalSavings(total);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      Alert.alert('Error', error.message || 'Failed to load member data');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
+
+  // Load data when screen focuses
+  useEffect(() => {
+    if (isFocused) {
+      fetchData();
+    }
+  }, [isFocused, fetchData]);
+
+  // Set up realtime subscription for savings changes
+  useEffect(() => {
+    const userId = supabase.auth.getSession()?.user?.id;
+    if (!userId) return;
+
+    const savingsSubscription = supabase
+      .channel('savings_changes')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'savings',
+        filter: `member_id=eq.${userId}`
+      }, () => {
+        fetchData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(savingsSubscription);
+    };
+  }, [fetchData]);
 
   const handleSubmit = async () => {
     if (!amount) {
@@ -102,18 +132,20 @@ export default function AddSavingsScreen({ navigation }) {
 
       if (error) throw error;
 
-      // Refresh total savings after successful submission
-      const { data: savings } = await supabase
-        .from('savings')
-        .select('amount')
-        .eq('member_id', user.id);
-
-      const newTotal = savings?.reduce((sum, item) => sum + item.amount, 0) || 0;
-      setTotalSavings(newTotal);
-
-      Alert.alert('Success', 'Savings recorded successfully!');
-      setAmount('');
-      setPaymentProof('');
+      Alert.alert(
+        'Success', 
+        'Savings recorded successfully!',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setAmount('');
+              setPaymentProof('');
+              fetchData(); // Refresh data after successful submission
+            }
+          }
+        ]
+      );
     } catch (error) {
       console.error('Save error:', error);
       Alert.alert('Error', error.message || 'Could not save your savings entry.');
@@ -121,6 +153,11 @@ export default function AddSavingsScreen({ navigation }) {
       setLoading(false);
     }
   };
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchData();
+  }, [fetchData]);
 
   return (
     <ImageBackground
@@ -132,7 +169,17 @@ export default function AddSavingsScreen({ navigation }) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.container}
       >
-        <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <ScrollView 
+          contentContainerStyle={styles.scrollContainer}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0A3D62']}
+              tintColor="#0A3D62"
+            />
+          }
+        >
           <View style={styles.overlay}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
               <Text style={styles.backButtonText}>← Back</Text>
@@ -188,8 +235,6 @@ export default function AddSavingsScreen({ navigation }) {
                     )}
                   </TouchableOpacity>
                 </View>
-
-                {/* Removed the Recent Transactions section */}
               </>
             )}
           </View>
